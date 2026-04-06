@@ -1,6 +1,5 @@
-import React from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Settings, LogOut, Bell } from 'lucide-react';
+import { Bell } from 'lucide-react';
 
 export function Header() {
   const { role, setRole, clinicName } = useAuth();
