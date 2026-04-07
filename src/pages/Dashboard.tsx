@@ -3,7 +3,7 @@ import { Calendar as CalendarIcon, Users, CheckCircle, ShieldAlert, Loader2, Edi
 import { useAuth } from '../context/AuthContext';
 import { PatientDetailDrawer } from '../components/dashboard/PatientDetailDrawer';
 import type { Patient } from '../components/dashboard/PatientDetailDrawer';
-import { fetchDailyAppointments, fetchWaitlist, fetchHumanInterventions, fetchClinicConfig, fetchDoctorMetrics, updateAverageTicket } from '../services/api';
+import { fetchDailyAppointments, fetchWaitlist, fetchHumanInterventions, fetchClinicConfig, fetchDoctorMetrics, updateAverageTicket, toggleBotPausa, cancelAppointmentWebhook, sendReminderWebhook } from '../services/api';
 import type { DoctorMetrics } from '../services/api';
 import clsx from 'clsx';
 
@@ -127,9 +127,7 @@ export function Dashboard() {
 
   const handleToggleBotPausa = async (patientId: string, paused: boolean) => {
     try {
-      import('../services/api').then(async ({ toggleBotPausa }) => {
-         await toggleBotPausa(SCHEMA, patientId, paused);
-      });
+      await toggleBotPausa(SCHEMA, patientId, paused);
       
       const updateList = (list: Patient[]) => 
         list.map(p => p.id === patientId ? { ...p, botPaused: paused } : p);
@@ -151,8 +149,6 @@ export function Dashboard() {
     if (!confirmCancel) return;
 
     try {
-      const { cancelAppointmentWebhook } = await import('../services/api');
-      
       const payload = {
          gcal_event_id: patient.gcalEventId || "",
          patient_name: patient.name,
@@ -179,7 +175,6 @@ export function Dashboard() {
 
   const handleSendReminder = async (patient: Patient, template: string) => {
     try {
-      const { sendReminderWebhook } = await import('../services/api');
       await sendReminderWebhook(SCHEMA, patient, template);
       alert(`Lembrete ${template} enviado com sucesso para ${patient.name}!`);
     } catch (err) {
