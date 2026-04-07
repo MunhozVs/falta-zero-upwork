@@ -8,7 +8,6 @@ import {
   ShieldAlert, 
   LineChart, 
   FileText, 
-  Settings, 
   Server, 
   Activity, 
   Database,
@@ -33,7 +32,7 @@ const MENU_SECRETARY: NavItem[] = [
 const MENU_DOCTOR: NavItem[] = [
   { name: 'Performance e ROI', path: '/', icon: LineChart },
   { name: 'Protocolos Clínicos', path: '/protocolos', icon: FileText },
-  { name: 'Configurações', path: '/config', icon: Settings },
+  { name: 'Ações Manuais', path: '/escalations', icon: ShieldAlert },
 ];
 
 const MENU_CTO: NavItem[] = [

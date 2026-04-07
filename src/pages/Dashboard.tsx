@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, Users, CheckCircle, ShieldAlert, Loader2 } from 'lucide-react';
+import { Calendar as CalendarIcon, Users, CheckCircle, ShieldAlert, Loader2, Edit2, Check, Clock, DollarSign } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PatientDetailDrawer } from '../components/dashboard/PatientDetailDrawer';
 import type { Patient } from '../components/dashboard/PatientDetailDrawer';
-import { fetchDailyAppointments, fetchWaitlist, fetchHumanInterventions, fetchClinicConfig } from '../services/api';
+import { fetchDailyAppointments, fetchWaitlist, fetchHumanInterventions, fetchClinicConfig, fetchDoctorMetrics, updateAverageTicket } from '../services/api';
+import type { DoctorMetrics } from '../services/api';
 import clsx from 'clsx';
 
 const SCHEMA = 'schema_cln_001'; // Mocking the schema selection for now
@@ -15,24 +16,7 @@ const secretaryKPIs = [
   { label: 'Vagas Recuperadas', value: '0', icon: Users, color: 'text-primary' },
 ];
 
-const statusColors: Record<string, string> = {
-  'Scheduled': "bg-blue-50 text-blue-700 border border-blue-200",
-  'Confirmed': "bg-green-50 text-green-700 border border-green-200",
-  'Cancelled': "bg-red-50 text-red-700 border border-red-200",
-  'Completed': "bg-gray-100 text-gray-700 border border-gray-200",
-  'Human_Required': "bg-tertiary-container/10 text-tertiary-container border border-tertiary-container/20",
-};
-
-const getStatusStyles = (status: string) => {
-  return statusColors[status] || "bg-surface-container-low text-on-surface-variant border border-outline-variant/10";
-};
-
-const getInitials = (name: string) => {
-  const names = name.trim().split(' ');
-  if (names.length === 0) return '?';
-  if (names.length === 1) return names[0].substring(0, 2).toUpperCase();
-  return (names[0][0] + names[names.length - 1][0]).toUpperCase();
-};
+import { getStatusStyles, getInitials } from '../utils/statusUtils';
 
 export function Dashboard() {
   const { role } = useAuth();
@@ -42,9 +26,16 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
+  // Secretary data
   const [appointments, setAppointments] = useState<Patient[]>([]);
   const [waitlist, setWaitlist] = useState<Patient[]>([]);
   const [pendentes, setPendentes] = useState<Patient[]>([]);
+
+  // Doctor data
+  const [doctorMetrics, setDoctorMetrics] = useState<DoctorMetrics | null>(null);
+  const [isEditingTicket, setIsEditingTicket] = useState(false);
+  const [ticketInput, setTicketInput] = useState('');
+  const [isUpdatingTicket, setIsUpdatingTicket] = useState(false);
 
   const loadData = async () => {
     try {
@@ -89,7 +80,7 @@ export function Dashboard() {
       setWaitlist(waitData.map(mapPatient));
       setPendentes(humanData.map(mapPatient));
 
-      // Se houver um paciente selecionado, atualiza ele também para refletir mudanças do banco
+      // Se houver um paciente selecionado, atualiza ele também
       if (selectedPatient) {
         const updated = [...apptsData, ...waitData, ...humanData]
           .find(p => (p.id || p.phone) === selectedPatient.id);
@@ -99,16 +90,33 @@ export function Dashboard() {
       }
 
     } catch (err: any) {
-      console.error('Erro ao buscar dados:', err);
+      console.error('Erro ao buscar dados da secretária:', err);
       setError('Não foi possível carregar os dados. Verifique a conexão com o Supabase.');
     } finally {
       setLoading(false);
     }
   };
 
+  const loadDoctorData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const metrics = await fetchDoctorMetrics(SCHEMA);
+      setDoctorMetrics(metrics);
+      setTicketInput(metrics.averageTicketValue.toString());
+    } catch (err: any) {
+      console.error('Erro ao buscar métricas do médico:', err);
+      setError('Não foi possível carregar as métricas gerenciais.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (role === 'secretary') {
+    if (role === 'secretary' || role === 'cto') {
       loadData();
+    } else if (role === 'doctor') {
+      loadDoctorData();
     }
   }, [role]);
 
@@ -180,8 +188,22 @@ export function Dashboard() {
     }
   };
 
+  const handleUpdateTicket = async () => {
+    try {
+       setIsUpdatingTicket(true);
+       const numVal = parseFloat(ticketInput.replace(',', '.')) || 0;
+       await updateAverageTicket(SCHEMA, numVal);
+       setDoctorMetrics(prev => prev ? { ...prev, averageTicketValue: numVal } : null);
+       setIsEditingTicket(false);
+    } catch(e) {
+       console.error('Erro ao salvar ticket', e);
+       alert('Erro ao salvar ticket médio.');
+    } finally {
+       setIsUpdatingTicket(false);
+    }
+  };
 
-  if (loading && role === 'secretary' && appointments.length === 0) {
+  if (loading && appointments.length === 0 && !doctorMetrics) {
     return (
       <div className="h-full w-full flex items-center justify-center min-h-[400px]">
         <div className="flex flex-col items-center gap-4">
@@ -195,7 +217,7 @@ export function Dashboard() {
   if (error) {
      return (
         <div className="h-full w-full flex items-center justify-center min-h-[400px]">
-           <div className="bg-red-50 p-8 rounded-[1.5rem] text-center border-2 border-dashed border-red-200  max-w-md">
+           <div className="bg-red-50 p-8 rounded-[1.5rem] text-center border-2 border-dashed border-red-200 justify-center max-w-md">
               <ShieldAlert className="mx-auto text-red-500 mb-4" size={40} />
               <h3 className="text-lg font-bold text-red-700 mb-2">Erro na Sincronização</h3>
               <p className="text-red-600 mb-6">{error}</p>
@@ -210,6 +232,185 @@ export function Dashboard() {
      )
   }
 
+  // --- RENDERING DOCTOR DASHBOARD ---
+  if (role === 'doctor' && doctorMetrics) {
+    const confirmationRate = doctorMetrics.totalAppointments > 0 
+      ? Math.round((doctorMetrics.confirmedCount / doctorMetrics.totalAppointments) * 100) 
+      : 0;
+      
+    const noShowRate = doctorMetrics.totalAppointments > 0 
+      ? Math.round((doctorMetrics.noShowCount / doctorMetrics.totalAppointments) * 100) 
+      : 0;
+
+    const hoursSaved = Math.round(((doctorMetrics.confirmedCount * 3) + (doctorMetrics.vagasRecuperadas * 15)) / 60);
+    const estimatedRevenue = doctorMetrics.vagasRecuperadas * doctorMetrics.averageTicketValue;
+
+    return (
+      <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-outline-variant/15 pb-6">
+          <div>
+            <h2 className="text-3xl font-display font-semibold text-on-surface tracking-tight mb-2 text-balance">
+              Visão Estratégica da Clínica
+            </h2>
+            <p className="text-on-surface-variant font-medium text-lg">
+              Resumo do impacto do assistente virtual nos seus resultados.
+            </p>
+          </div>
+        </div>
+
+        {/* Doctor KPIs */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          
+          {/* Revenue Card (Special) */}
+          <div className="bg-gradient-to-br from-emerald-500 to-teal-700 p-6 rounded-[1.5rem] flex flex-col gap-4 relative overflow-hidden group shadow-lg text-white md:col-span-2 lg:col-span-1">
+            <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 blur-3xl rounded-full"></div>
+            <div className="flex justify-between items-start z-10">
+              <span className="font-semibold text-emerald-50 uppercase tracking-widest text-sm">Receita Recuperada</span>
+              <div className="p-2 rounded-xl bg-white/20 backdrop-blur-md">
+                <DollarSign size={22} className="text-white" />
+              </div>
+            </div>
+            <h3 className="text-4xl font-display font-bold tracking-tight z-10">
+              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(estimatedRevenue)}
+            </h3>
+            
+            <div className="mt-auto z-10 pt-4 flex items-center justify-between border-t border-white/20">
+              <div className="flex items-center gap-2">
+                 <span className="text-sm font-medium text-emerald-100">Ticket Médio:</span>
+                 {isEditingTicket ? (
+                   <div className="flex items-center space-x-1">
+                     <span className="text-sm font-bold">R$</span>
+                     <input
+                       type="number"
+                       className="w-20 bg-white/20 backdrop-blur text-white px-2 py-0.5 rounded text-sm outline-none focus:ring-1 focus:ring-white border-none"
+                       value={ticketInput}
+                       onChange={(e) => setTicketInput(e.target.value)}
+                       disabled={isUpdatingTicket}
+                     />
+                     <button onClick={handleUpdateTicket} className="p-1 hover:bg-white/20 rounded">
+                       {isUpdatingTicket ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                     </button>
+                   </div>
+                 ) : (
+                   <div className="flex items-center gap-1 group/ticket cursor-pointer" onClick={() => setIsEditingTicket(true)}>
+                     <span className="font-bold text-sm">
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(doctorMetrics.averageTicketValue)}
+                     </span>
+                     <Edit2 size={12} className="opacity-50 group-hover/ticket:opacity-100 transition-opacity" />
+                   </div>
+                 )}
+              </div>
+              <p className="text-xs text-emerald-100/70 font-medium">{doctorMetrics.vagasRecuperadas} vagas preenchidas</p>
+            </div>
+          </div>
+
+          <div className="bg-surface-container-lowest p-6 rounded-[1.5rem] flex flex-col gap-4 relative overflow-hidden group hover:shadow-ambient transition-all border border-outline-variant/10">
+            <div className="flex justify-between items-start">
+              <span className="text-on-surface-variant font-medium">Taxa de Confirmação</span>
+              <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
+                <CheckCircle size={22} className="opacity-80 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+               <h3 className="text-4xl font-display font-bold text-on-surface tracking-tight">{confirmationRate}%</h3>
+            </div>
+            <p className="text-sm text-on-surface-variant font-medium mt-auto">
+              {doctorMetrics.confirmedCount} confirmados automaticamente
+            </p>
+            <div className="absolute -bottom-6 -right-6 w-24 h-24 bg-blue-500/5 rounded-full blur-2xl"></div>
+          </div>
+
+          <div className="bg-surface-container-lowest p-6 rounded-[1.5rem] flex flex-col gap-4 relative overflow-hidden group hover:shadow-ambient transition-all border border-outline-variant/10">
+            <div className="flex justify-between items-start">
+              <span className="text-on-surface-variant font-medium">Tempo Economizado</span>
+              <div className="p-2 rounded-xl bg-tertiary-container/10 text-tertiary-container">
+                <Clock size={22} className="opacity-80 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+               <h3 className="text-4xl font-display font-bold text-on-surface tracking-tight">{hoursSaved}h</h3>
+            </div>
+            <p className="text-sm text-on-surface-variant font-medium mt-auto">
+              Secretária livre para tarefas cruciais
+            </p>
+            <div className="absolute -bottom-6 -right-6 w-24 h-24 bg-tertiary-container/10 rounded-full blur-2xl"></div>
+          </div>
+
+          <div className="bg-surface-container-lowest p-6 rounded-[1.5rem] flex flex-col gap-4 relative overflow-hidden group hover:shadow-ambient transition-all border border-outline-variant/10">
+            <div className="flex justify-between items-start">
+              <span className="text-on-surface-variant font-medium">Índice de No-Show</span>
+              <div className="p-2 rounded-xl bg-red-50 text-red-600">
+                <ShieldAlert size={22} className="opacity-80 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+               <h3 className="text-4xl font-display font-bold text-on-surface tracking-tight">{noShowRate}%</h3>
+            </div>
+            <p className="text-sm text-on-surface-variant font-medium mt-auto">
+               Baseado em {doctorMetrics.noShowCount} faltas de {doctorMetrics.totalAppointments} agendamentos
+            </p>
+          </div>
+
+          <div className="bg-surface-container-lowest p-6 rounded-[1.5rem] flex flex-col gap-4 relative overflow-hidden group hover:shadow-ambient transition-all border border-outline-variant/10">
+             <div className="flex justify-between items-start">
+              <span className="text-on-surface-variant font-medium">Eficiência da Lista de Espera</span>
+              <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                <Users size={22} className="opacity-80 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+               <h3 className="text-4xl font-display font-bold text-on-surface tracking-tight">{doctorMetrics.vagasRecuperadas}</h3>
+               <span className="text-on-surface-variant font-medium text-sm">vagas</span>
+            </div>
+            <p className="text-sm text-on-surface-variant font-medium mt-auto">
+               Buracos na agenda que o robô cobriu
+            </p>
+          </div>
+          
+
+        </div>
+
+        {/* Volume Distributions */}
+        {doctorMetrics.examVolume && doctorMetrics.examVolume.length > 0 && (
+          <div className="bg-surface-container-lowest p-6 lg:p-8 rounded-[1.5rem] shadow-sm border border-outline-variant/10 group hover:shadow-ambient transition-shadow">
+             <h3 className="text-xl font-display font-semibold mb-8 flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                   <CalendarIcon size={20} className="text-primary" />
+                   Distribuição de Volume por Exame/Protocolo
+                </span>
+                <span className="text-sm bg-primary/5 text-primary px-3 py-1 rounded-full font-bold">
+                   Total: {doctorMetrics.totalAppointments}
+                </span>
+             </h3>
+             <div className="space-y-6">
+                {doctorMetrics.examVolume.map((exam, idx) => (
+                  <div key={idx} className="flex flex-col gap-2">
+                    <div className="flex justify-between items-end">
+                      <span className="font-semibold text-on-surface">{exam.name}</span>
+                      <div className="flex flex-col items-end">
+                        <span className="font-bold text-on-surface">{exam.count} agendamentos</span>
+                        <span className="text-[10px] text-on-surface-variant font-bold tracking-widest uppercase">{exam.percentage}%</span>
+                      </div>
+                    </div>
+                    <div className="h-3 w-full bg-surface-container-low rounded-full overflow-hidden border border-outline-variant/5">
+                      <div 
+                        className="h-full bg-gradient-to-r from-primary to-primary-container rounded-full transition-all duration-1000 ease-out relative"
+                        style={{ width: `${exam.percentage}%` }}
+                      >
+                         <div className="absolute top-0 right-0 bottom-0 w-10 bg-gradient-to-r from-transparent to-white/20"></div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+             </div>
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
+  // --- RENDERING SECRETARY / CTO DASHBOARD ---
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       
@@ -218,23 +419,23 @@ export function Dashboard() {
         <div>
           <h2 className="text-3xl font-display font-semibold text-on-surface tracking-tight mb-2 text-balance">
             {role === 'secretary' && 'Bom dia, Bruna!'}
-            {role === 'doctor' && 'Visão Estratégica da Clínica'}
             {role === 'cto' && 'God Mode: Infraestrutura'}
           </h2>
           <p className="text-on-surface-variant font-medium text-lg">
             {role === 'secretary' && `Você tem ${pendentes.length} alertas pendentes no momento.`}
-            {role === 'doctor' && 'Sua taxa de no-show está 15% menor este mês.'}
             {role === 'cto' && 'Todos os sistemas operando normalmente.'}
           </p>
         </div>
-        <div className="flex gap-3">
-          <button className="px-5 py-2.5 rounded-xl font-medium border border-outline-variant/20 hover:bg-surface-container-low transition-colors duration-200">
-            Exportar Relatório
-          </button>
-          <button className="px-5 py-2.5 rounded-xl font-medium text-white bg-gradient-to-br from-primary to-primary-container shadow-ambient hover:opacity-90 transition-all duration-200">
-            Nova Ação
-          </button>
-        </div>
+        {role !== 'secretary' && (
+          <div className="flex gap-3">
+            <button className="px-5 py-2.5 rounded-xl font-medium border border-outline-variant/20 hover:bg-surface-container-low transition-colors duration-200">
+              Exportar Relatório
+            </button>
+            <button className="px-5 py-2.5 rounded-xl font-medium text-white bg-gradient-to-br from-primary to-primary-container shadow-ambient hover:opacity-90 transition-all duration-200">
+              Nova Ação
+            </button>
+          </div>
+        )}
       </div>
 
       {/* KPI Banners - The Layering Principle */}
@@ -272,7 +473,6 @@ export function Dashboard() {
               <span className="flex items-center gap-2">
                 <CalendarIcon size={20} className="text-primary" />
                 {role === 'secretary' && 'Próximos Agendamentos'}
-                {role === 'doctor' && 'Análise de Volume'}
                 {role === 'cto' && 'Status de Webhooks'}
               </span>
               <span className="text-sm font-sans font-medium text-primary cursor-pointer hover:underline">Ver tudo</span>
@@ -324,7 +524,6 @@ export function Dashboard() {
               <span className="flex items-center gap-2">
                 <Users size={20} className="text-primary" />
                 {role === 'secretary' && 'Lista de Espera'}
-                {role === 'doctor' && 'Protocolos Populares'}
                 {role === 'cto' && 'Tenants Recentemente Ativos'}
               </span>
               <span className="text-sm font-sans font-medium text-primary cursor-pointer hover:underline">Gerenciar</span>

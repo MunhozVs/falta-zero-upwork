@@ -160,3 +160,292 @@ export async function sendReminderWebhook(schema: string, patient: any, template
 
   return true;
 }
+
+export interface ExamVolume {
+  name: string;
+  count: number;
+  percentage: number;
+}
+
+export interface DoctorMetrics {
+  totalAppointments: number;
+  noShowCount: number;
+  confirmedCount: number;
+  vagasRecuperadas: number;
+  averageTicketValue: number;
+  examVolume: ExamVolume[];
+}
+
+/**
+ * Busca as métricas consolidadas para o Dashboard do Gestor (Médico).
+ */
+export async function fetchDoctorMetrics(schema: string): Promise<DoctorMetrics> {
+  const supabase = getClinicClient(schema);
+
+  // 1. Agendamentos (No-Show, Confirmações e Volume de Exames)
+  const { data: appointmentsData, error: apptError } = await supabase
+    .from('appointments')
+    .select('status, exam_type');
+
+  if (apptError) throw apptError;
+
+  const totalAppointments = appointmentsData?.length || 0;
+  const noShowCount = appointmentsData?.filter(a => a.status === 'No_Show' || a.status === 'No-Show').length || 0;
+  const confirmedCount = appointmentsData?.filter(a => a.status === 'Confirmed').length || 0;
+
+  // Cálculo de volume por exame
+  const examCounts: Record<string, number> = {};
+  appointmentsData?.forEach(a => {
+    // Padronizar capitalização para evitar duplicatas, ex: "Ressonância" e "ressonância"
+    const examName = a.exam_type?.trim() || 'Não Especificado';
+    const formatted = examName.charAt(0).toUpperCase() + examName.slice(1).toLowerCase();
+    examCounts[formatted] = (examCounts[formatted] || 0) + 1;
+  });
+
+  const examVolume: ExamVolume[] = Object.entries(examCounts)
+    .map(([name, count]) => ({
+      name,
+      count,
+      percentage: totalAppointments > 0 ? Math.round((count / totalAppointments) * 100) : 0
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  // 2. Vagas recuperadas (Lista de Espera que virou Confirmed)
+  const { data: waitlistData, error: waitlistError } = await supabase
+    .from('waitlist')
+    .select('status');
+
+  if (waitlistError) throw waitlistError;
+
+  const vagasRecuperadas = waitlistData?.filter(w => w.status === 'Confirmed').length || 0;
+
+  // 3. Ticket Médio
+  const { data: configData, error: configError } = await supabase
+    .from('clinic_config')
+    .select('average_ticket_value')
+    .limit(1)
+    .single();
+
+  const averageTicketValue = configData?.average_ticket_value || 0;
+
+  return {
+    totalAppointments,
+    noShowCount,
+    confirmedCount,
+    vagasRecuperadas,
+    averageTicketValue,
+    examVolume
+  };
+}
+
+/**
+ * Atualiza o valor do ticket médio na configuração da clínica.
+ */
+export async function updateAverageTicket(schema: string, newValue: number) {
+  const supabase = getClinicClient(schema);
+  
+  // Pegamos a chave primária ou id da clínica pra atualizar com segurança
+  const { data: configData, error: fetchErr } = await supabase
+    .from('clinic_config')
+    .select('clinic_id')
+    .limit(1)
+    .single();
+
+  if (fetchErr || !configData) throw new Error('Falha ao obter dados da clínica para edição');
+
+  const { data, error } = await supabase
+    .from('clinic_config')
+    .update({ average_ticket_value: newValue })
+    .eq('clinic_id', configData.clinic_id);
+
+  if (error) throw error;
+  return data;
+}
+
+export interface Protocol {
+  id?: string;
+  clinic_id: string;
+  exam_code: string;
+  nome_para_paciente: string;
+  instrucoes_preparo: string;
+  jejum_horas?: number;
+  hidratacao?: string;
+  medicacao_notas?: string;
+  pdf_url?: string;
+  pdf_hash?: string;
+  dify_synced?: boolean;
+  dify_synced_at?: string;
+  version?: number;
+  active?: boolean;
+}
+
+export async function fetchProtocols(schema: string): Promise<Protocol[]> {
+  const supabase = getClinicClient(schema);
+  const { data, error } = await supabase
+    .from('protocols')
+    .select('*')
+    .eq('active', true)
+    .order('exam_code', { ascending: true });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function saveProtocol(schema: string, protocol: Protocol) {
+  const supabase = getClinicClient(schema);
+
+  if (protocol.id) {
+    // Update existing protocol
+    const { data: extg, error: errFetch } = await supabase
+      .from('protocols')
+      .select('version')
+      .eq('id', protocol.id)
+      .single();
+
+    const currentVersion = extg ? extg.version : 0;
+    
+    const { data, error } = await supabase
+      .from('protocols')
+      .update({
+        ...protocol,
+        version: currentVersion + 1,
+        dify_synced: false,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', protocol.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } else {
+    // Insert new protocol
+    const { data, error } = await supabase
+      .from('protocols')
+      .insert([
+        { ...protocol, version: 1, dify_synced: false }
+      ])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+}
+
+export async function syncProtocolToDify(schema: string, protocol: Protocol) {
+  const response = await fetch('https://n8n.zerofalta.com/webhook/sync-protocol', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      schema,
+      protocol: {
+        ...protocol
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Falha HTTP ao disparar webhook de sincronização com Dify');
+  }
+
+  // Update synced flag localmente
+  const supabase = getClinicClient(schema);
+  await supabase
+    .from('protocols')
+    .update({ dify_synced: true, dify_synced_at: new Date().toISOString() })
+    .eq('id', protocol.id);
+
+  return true;
+}
+
+export async function uploadProtocolPDF(schema: string, file: File): Promise<string> {
+  const supabase = getClinicClient(schema);
+  // Example path using schema + timestamp + filename to avoid colisions
+  const filePath = `${schema}/${Date.now()}_${file.name}`;
+  
+  const { data, error } = await supabase.storage
+    .from('protocols_pdfs')
+    .upload(filePath, file, { upsert: true });
+
+  if (error) throw error;
+
+  const { data: publicUrlData } = supabase.storage
+    .from('protocols_pdfs')
+    .getPublicUrl(filePath);
+
+  return publicUrlData.publicUrl;
+}
+
+export interface EscalationReasonCount {
+  reason: string;
+  count: number;
+}
+
+export interface EscalationMetrics {
+  totalActive: number;
+  escalationRate: number; // % do total de agendamentos
+  avgWaitMinutes: number;
+  reasonDistribution: EscalationReasonCount[];
+  totalResolvedToday: number;
+}
+
+export async function fetchEscalationData(schema: string): Promise<{
+  activeQueue: any[],
+  metrics: EscalationMetrics
+}> {
+  const supabase = getClinicClient(schema);
+
+  // 1. Fila Ativa (quem está com human_required_flag = true agora)
+  const { data: activeQueue, error: queueErr } = await supabase
+    .from('appointments')
+    .select('*')
+    .eq('human_required_flag', true)
+    .order('human_required_at', { ascending: true });
+
+  if (queueErr) throw queueErr;
+
+  // 2. Métricas Gerais (usando appointments do dia pra taxa)
+  const today = new Date().toISOString().split('T')[0];
+  const { data: allToday, error: allErr } = await supabase
+    .from('appointments')
+    .select('human_required_flag, human_required_reason, human_required_at, updated_at')
+    .gte('appointment_datetime', today);
+
+  if (allErr) throw allErr;
+
+  const totalToday = allToday?.length || 0;
+  const escalatedToday = allToday?.filter(a => a.human_required_flag).length || 0;
+  const escalationRate = totalToday > 0 ? Math.round((escalatedToday / totalToday) * 100) : 0;
+
+  // Distribuição de Motivos
+  const reasonCounts: Record<string, number> = {};
+  allToday?.forEach(a => {
+    if (a.human_required_flag && a.human_required_reason) {
+      const r = a.human_required_reason || 'Outros';
+      reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+    }
+  });
+
+  const reasonDistribution = Object.entries(reasonCounts)
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
+
+  // Tempo médio (simulado se não houver resolved_at, usando updated_at se flag for false mas foi true)
+  // Simplificação: vamos focar no volume e taxa por enquanto
+  
+  const metrics: EscalationMetrics = {
+    totalActive: activeQueue?.length || 0,
+    escalationRate,
+    avgWaitMinutes: 12, // Mock por enquanto se não houver log de resolução
+    reasonDistribution,
+    totalResolvedToday: allToday?.filter(a => !a.human_required_flag && a.updated_at > today).length || 0
+  };
+
+  return {
+    activeQueue: activeQueue || [],
+    metrics
+  };
+}
