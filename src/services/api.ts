@@ -190,12 +190,12 @@ export async function fetchDoctorMetrics(schema: string): Promise<DoctorMetrics>
   if (apptError) throw apptError;
 
   const totalAppointments = appointmentsData?.length || 0;
-  const noShowCount = appointmentsData?.filter(a => a.status === 'No_Show' || a.status === 'No-Show').length || 0;
-  const confirmedCount = appointmentsData?.filter(a => a.status === 'Confirmed').length || 0;
+  const noShowCount = appointmentsData?.filter((a: any) => a.status === 'No_Show' || a.status === 'No-Show').length || 0;
+  const confirmedCount = appointmentsData?.filter((a: any) => a.status === 'Confirmed').length || 0;
 
   // Cálculo de volume por exame
   const examCounts: Record<string, number> = {};
-  appointmentsData?.forEach(a => {
+  appointmentsData?.forEach((a: any) => {
     // Padronizar capitalização para evitar duplicatas, ex: "Ressonância" e "ressonância"
     const examName = a.exam_type?.trim() || 'Não Especificado';
     const formatted = examName.charAt(0).toUpperCase() + examName.slice(1).toLowerCase();
@@ -217,10 +217,10 @@ export async function fetchDoctorMetrics(schema: string): Promise<DoctorMetrics>
 
   if (waitlistError) throw waitlistError;
 
-  const vagasRecuperadas = waitlistData?.filter(w => w.status === 'Confirmed').length || 0;
+  const vagasRecuperadas = waitlistData?.filter((w: any) => w.status === 'Confirmed').length || 0;
 
   // 3. Ticket Médio
-  const { data: configData, error: configError } = await supabase
+  const { data: configData } = await supabase
     .from('clinic_config')
     .select('average_ticket_value')
     .limit(1)
@@ -245,13 +245,13 @@ export async function updateAverageTicket(schema: string, newValue: number) {
   const supabase = getClinicClient(schema);
   
   // Pegamos a chave primária ou id da clínica pra atualizar com segurança
-  const { data: configData, error: fetchErr } = await supabase
+  const { data: configData } = await supabase
     .from('clinic_config')
     .select('clinic_id')
     .limit(1)
     .single();
 
-  if (fetchErr || !configData) throw new Error('Falha ao obter dados da clínica para edição');
+  if (!configData) throw new Error('Falha ao obter dados da clínica para edição');
 
   const { data, error } = await supabase
     .from('clinic_config')
@@ -296,13 +296,13 @@ export async function saveProtocol(schema: string, protocol: Protocol) {
 
   if (protocol.id) {
     // Update existing protocol
-    const { data: extg, error: errFetch } = await supabase
+    const { data: existing } = await supabase
       .from('protocols')
       .select('version')
       .eq('id', protocol.id)
       .single();
 
-    const currentVersion = extg ? extg.version : 0;
+    const currentVersion = existing ? existing.version : 0;
     
     const { data, error } = await supabase
       .from('protocols')
@@ -366,7 +366,7 @@ export async function uploadProtocolPDF(schema: string, file: File): Promise<str
   // Example path using schema + timestamp + filename to avoid colisions
   const filePath = `${schema}/${Date.now()}_${file.name}`;
   
-  const { data, error } = await supabase.storage
+  const { error } = await supabase.storage
     .from('protocols_pdfs')
     .upload(filePath, file, { upsert: true });
 
@@ -417,12 +417,12 @@ export async function fetchEscalationData(schema: string): Promise<{
   if (allErr) throw allErr;
 
   const totalToday = allToday?.length || 0;
-  const escalatedToday = allToday?.filter(a => a.human_required_flag).length || 0;
+  const escalatedToday = allToday?.filter((a: any) => a.human_required_flag).length || 0;
   const escalationRate = totalToday > 0 ? Math.round((escalatedToday / totalToday) * 100) : 0;
 
   // Distribuição de Motivos
   const reasonCounts: Record<string, number> = {};
-  allToday?.forEach(a => {
+  allToday?.forEach((a: any) => {
     if (a.human_required_flag && a.human_required_reason) {
       const r = a.human_required_reason || 'Outros';
       reasonCounts[r] = (reasonCounts[r] || 0) + 1;
@@ -441,7 +441,7 @@ export async function fetchEscalationData(schema: string): Promise<{
     escalationRate,
     avgWaitMinutes: 12, // Mock por enquanto se não houver log de resolução
     reasonDistribution,
-    totalResolvedToday: allToday?.filter(a => !a.human_required_flag && a.updated_at > today).length || 0
+    totalResolvedToday: allToday?.filter((a: any) => !a.human_required_flag && a.updated_at > today).length || 0
   };
 
   return {

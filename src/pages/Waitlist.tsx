@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { 
-  Users, Search, MessageSquare, 
+  Users, Search, 
   Clock, Calendar, AlertCircle, Loader2, 
-  Star, User, Trash2
+  Star
 } from 'lucide-react';
-import { fetchWaitlist, toggleBotPausa, cancelAppointmentWebhook, sendReminderWebhook } from '../services/api';
+import { fetchWaitlist, toggleBotPausa, sendReminderWebhook } from '../services/api';
 import { PatientDetailDrawer } from '../components/dashboard/PatientDetailDrawer';
 import type { Patient } from '../components/dashboard/PatientDetailDrawer';
 import { getInitials } from '../utils/statusUtils';
